@@ -179,7 +179,7 @@ The right choice depends on whether your answers have a hard quality floor and w
 
 - **You need a hard floor** (varied or open-ended content, emails, teaching, anything where dropping the core is unacceptable): use the **adaptive action-test** rule (R-ACT). It held the floor at 100% on every task and never amputates a multi-point core — but **expect only baseline-level dropping**; it mainly trims preamble and scaffolding, not secondary facts.
 
-- **You want real dropping and your cores fit a small budget:** use a **hard cap** (e.g. *"≤2 sentences or ≤3 bullets, no preamble"*). It was the only rule that achieved **both** high dropping (~88%) **and** a 100% floor in these tests. Manage its single failure mode — a core genuinely larger than the budget — by **sizing the cap to the domain**, or adding a narrow *"expand only if the answer is literally incomplete"* escape clause (note: that clause is **untested** here).
+- **You want real dropping and your cores fit a small budget:** use a **hard cap** (e.g. *"≤2 sentences or ≤3 bullets, no preamble"*). It was the only rule that achieved **both** high dropping (~88%) **and** a 100% floor in these tests. Manage its single failure mode — a core genuinely larger than the budget — by **sizing the cap to the domain**, or adding a narrow *"expand only if the answer is literally incomplete"* escape clause (the **valve**). A follow-up A/B (below) tested that valve directly: it does **not** get abused to keep fat, so it is safe to add; its *rescue* benefit went unproven only because this model never breached the bare cap to begin with.
 
 - **Rank-only** (*"output just the single most important point"*) is **dominated**: it drops the most but breaches the floor the worst. Use it only for genuinely single-point answers.
 
@@ -192,6 +192,32 @@ The right choice depends on whether your answers have a hard quality floor and w
 - **Semi-subjective floors.** The TEACH and ROAST floors are judgment calls. The ROAST grader agreed with a human hand-read on 28/28 outputs. The rank-only TEACH breach hinges on a *strict* reading ("the base case must be explicitly stated"); under a lenient "conveys that it terminates" reading, rank-only's TEACH floor would be higher. All MP1/MP2/COLD floor calls are objective and were spot-checked against source text.
 - **Cold-email metric nuance.** The pre-registered secondary set for COLD scored *in-body* padding (pleasantries, flattery, a credentials dump). But the model's dominant over-share on cold emails was **meta-scaffolding** *around* the email (a preamble, a coaching "Notes:" block, a trailing "want a shorter variant?") — which the pre-registered set did not score. An exploratory (non-pre-registered) scaffolding metric showed the judgment-prompts strip the preamble but keep the coaching block (they stay in "helpful assistant" mode, which is part of what limits their dropping), while the discretion-removing rules emit the bare artifact. The pre-registered set was **not** changed post hoc; this is flagged as the one place the headline drop-rate scored the wrong axis for one task.
 - **Detectors are generous.** Secondary-fact detection counts any surfacing of an item as "not dropped", so reported drop-rates are conservative lower bounds.
+
+---
+
+## Follow-up: does the valve actually fire?
+
+<p style="color:#666; margin-top:-0.4em;"><em>Added 2026-06-23, after the original study above. Same methodology (pre-registered, objective + blind-graded, hermetic `claude-opus-4-8` per datapoint) as Runs 2–3.</em></p>
+
+The recommendation above hands the hard cap a single escape clause — the *valve* — and admits it was untested. So we tested it. The A/B is the minimal one: two rules byte-identical except for the valve.
+
+- **R-CAP** (control): *"Answer in at most 2 sentences OR 3 short bullets. No exceptions, no preamble."*
+- **R-VALVE** (candidate): the same cap plus *"Treat it as a hard limit, not a target. Go over only when the answer is factually wrong or unusable without the extra — 'relevant', 'thorough', or 'might help' never qualify."*
+
+Two pre-registered hypotheses. **H1 — the valve is not abused:** the model doesn't read "unless it'd be wrong/unusable" as license to keep fat and drift back toward the no-rule ~71% baseline. **H2 — the valve rescues the floor:** when a necessary core genuinely can't fit the cap, the bare cap is forced to amputate a load-bearing point and the valve lets it overflow to keep all of them. N=5 per cell. The abuse tasks reuse the small/creative cores from the main study (the migration review, the JS roast, the cold email); the rescue tasks are two purpose-built six-point safety cores — how to jump-start a dead battery, and how to use an EpiPen — each with six load-bearing points engineered to overflow "3 short bullets."
+
+| Pooled cell | R-CAP — drop% / floor% | R-VALVE — drop% / floor% |
+|-------------|-----------------------:|-------------------------:|
+| abuse (small cores) | 92.7 / 100 | 91.2 / 100 |
+| MP-BIG (six-point cores) | 95 / 100 | 88.3 / 90 |
+
+**H1: confirmed.** On the abuse tasks the valve tracks the bare cap almost exactly — 92.7% vs 91.2% drop, a 1.5-point gap, nowhere near collapsing toward the 71% baseline — and the floor stays 100% under both. The valve is not exploited to keep fat. (Words rise modestly under the valve, but that is denser phrasing, not retained secondary material; drop-rate, the fat metric, held.)
+
+**H2: inconclusive — and *why* is the actual result.** The rescue test needs the bare cap to breach, and it never did: R-CAP held the floor at 100% on both six-point cores, all ten runs. Opus 4.8 simply packed six load-bearing safety points into three dense bullets — correct terminal order, the spark/explosive-hydrogen rationale, the reverse-disconnect order, all present and correct under the blind grader, not leniency. With nothing forcing R-CAP to amputate, the valve had nothing to rescue. Per the pre-registered read, that lands as inconclusive, not as support — a six-point core wasn't big enough to stress this model's cap. (The lone floor miss in the whole run was R-VALVE dropping one minor caution on one jump-start output, 1-in-5 — the valve scoring *worse* by noise, the opposite of a rescue.)
+
+**Verdict: keep the valve as prescribed.** It is costless — demonstrably not abused — and it is the correct insurance wording for the case where a genuinely-oversized core *would* force the bare cap to amputate. We just never got to watch it work, because the model is too good at compression for a six-point core to make the cap bite. Actually proving the rescue would take a core of ~8–10 genuinely independent points, or one where each point needs its own sentence so dense-bullet packing can't save it.
+
+The clean one-liner: a study that set out to test the valve instead measured how absurdly compressible this model's output is. A full six-step safety procedure fits in three bullets without losing a point.
 
 ---
 
