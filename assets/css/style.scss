@@ -1,0 +1,160 @@
+---
+---
+
+// Cayman's light theme is the baseline; we layer a dark palette on top.
+// Theme selection (see _layouts/default.html):
+//   - data-theme="dark"  / "light"  -> explicit choice, wins over the OS
+//   - no data-theme attribute        -> "os": prefers-color-scheme governs
+@import 'jekyll-theme-cayman';
+
+// One dark palette, applied in two scopes: an explicit dark choice, and the
+// OS-dark fallback when the visitor has made no explicit choice. Keeping it in
+// a mixin means the two scopes can never drift apart.
+@mixin dark-palette {
+  body {
+    background-color: #0d1117;
+    color: #c9d1d9;
+  }
+
+  // Dimmed header gradient — keeps cayman's blue->green identity, white text
+  // still reads against it, but it no longer glares on a dark page.
+  .page-header {
+    background-color: #133b5e;
+    background-image: linear-gradient(120deg, #13533f, #133b5e);
+  }
+
+  a {
+    color: #58a6ff;
+  }
+
+  .main-content {
+    h1, h2, h3, h4, h5, h6 {
+      color: #3fb950;
+    }
+
+    code,
+    pre {
+      color: #c9d1d9;
+      background-color: #161b22;
+    }
+
+    pre {
+      border-color: #30363d;
+    }
+
+    blockquote {
+      color: #8b949e;
+      border-left-color: #30363d;
+    }
+
+    table th,
+    table td {
+      border-color: #30363d;
+    }
+
+    kbd {
+      background-color: #161b22;
+      border-color: #30363d;
+      border-bottom-color: #30363d;
+      box-shadow: inset 0 -1px 0 #30363d;
+      color: #c9d1d9;
+    }
+
+    hr {
+      background-color: #30363d;
+    }
+
+    // Plots ship with white backgrounds; without a defined edge they read as a
+    // harsh bright slab on the dark page. A border gives them an intentional
+    // frame; night-sky shots (already dark) are unaffected.
+    img {
+      border: 1px solid #30363d;
+      border-radius: 0.3rem;
+    }
+  }
+
+  .site-footer {
+    border-top-color: #30363d;
+  }
+
+  .site-footer-credits {
+    color: #8b949e;
+  }
+
+  // Rouge syntax tokens — the github-light defaults use near-black for
+  // keywords/operators, invisible on a dark block. Remap to a github-dark set.
+  .highlight {
+    background-color: #161b22;
+  }
+  .highlight pre,
+  pre.highlight {
+    background-color: #161b22;
+  }
+
+  .highlight {
+    .c, .cm, .c1, .cd, .cs, .cp { color: #8b949e; }       // comments
+    .k, .kc, .kd, .kn, .kp, .kr, .kv { color: #ff7b72; }  // keywords
+    .o, .ow { color: #ff7b72; }                            // operators
+    .kt { color: #ff7b72; }                                // type keyword
+    .s, .s1, .s2, .sb, .sc, .sd, .se, .sh, .si, .sx, .dl { color: #a5d6ff; } // strings
+    .sr { color: #7ee787; }                                // regex
+    .ss { color: #79c0ff; }
+    .m, .mi, .mf, .mh, .mo, .mb, .mx, .il { color: #79c0ff; } // numbers
+    .nf, .nl, .ne { color: #d2a8ff; }                      // function names
+    .nb, .bp { color: #ffa657; }                           // builtins
+    .nc, .no { color: #79c0ff; }                           // classes / constants
+    .nd { color: #d2a8ff; }                                // decorators
+    .nv, .vc, .vg, .vi, .na { color: #79c0ff; }            // variables / attrs
+    .nt { color: #7ee787; }                                // html/xml tags
+    .nn { color: #c9d1d9; }                                // namespace
+    .ni { color: #ffa657; }
+    .gh, .gu, .gp, .go { color: #8b949e; }                 // generic/prompt
+    .gd { color: #ffa198; background-color: #490202; }     // diff -
+    .gi { color: #7ee787; background-color: #033a16; }     // diff +
+    .err { color: #f85149; background-color: #490202; }
+    .w { color: #484f58; }
+  }
+}
+
+// Explicit dark choice — the prefix adds an element+attribute to every selector,
+// so each emitted rule outscores cayman's unprefixed base rule it overrides.
+html[data-theme="dark"] {
+  @include dark-palette;
+}
+
+// OS default: no explicit choice (no data-theme attribute) AND the OS prefers
+// dark. An explicit "light"/"dark" attribute opts out of this block.
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    @include dark-palette;
+  }
+}
+
+// Theme toggle button — lives in the header gradient in every mode, so it is
+// styled to read on the (always-colored) header. Reuses cayman's .btn look.
+.theme-toggle {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.92);
+  background-color: rgba(255, 255, 255, 0.12);
+  // Resting border kept ≥3:1 against the header gradient (WCAG 1.4.11) so the
+  // control reads as pressable, not as floating text.
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 0.3rem;
+  cursor: pointer;
+  transition: color 0.2s, background-color 0.2s, border-color 0.2s;
+
+  &:hover,
+  &:focus {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.4);
+  }
+
+  &:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+  }
+}
