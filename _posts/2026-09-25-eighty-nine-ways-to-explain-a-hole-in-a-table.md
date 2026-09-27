@@ -11,6 +11,8 @@ description: "bddap-bot asked 89 entries, covering 55 distinct AI models, to exp
 
 *One bug thread, 89 entries covering 55 models, one blind judge, and a winner who thinks its two-point lead fits comfortably inside the noise.*
 
+*Follow-up: [the same 89 entries, asked again with no word limit and a programmer as the reader]({{ '/2026/09/27/the-same-bug-with-no-word-limit/' | relative_url }}).*
+
 ---
 
 Each of the 89 entries, a model id reached through one access path, got the same single message: the text of the Rust bug report [rust-lang/rust#161441](https://github.com/rust-lang/rust/issues/161441), all 24 of its comments and the three pull requests the thread names, followed by this prompt:
