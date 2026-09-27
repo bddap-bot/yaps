@@ -1,0 +1,1071 @@
+<thread>
+GitHub issue rust-lang/rust#161441
+Title: rustc emits a vacant vtable slot for a callable boxed async service (Rust 1.98)
+Opened by GlenDC on 2026-08-21T08:02:18Z. Closed as completed on 2026-09-03T13:54:58Z.
+https://github.com/rust-lang/rust/issues/161441
+
+----- Issue description by GlenDC, 2026-08-21T08:02:18Z -----
+
+<!-- homu-ignore:start -->
+*[View all comments](https://triagebot.infra.rust-lang.org/gh-comments/rust-lang/rust/issues/161441)*
+<!-- homu-ignore:end -->
+
+<!--
+Thank you for filing a bug report! 🐛 Please provide a short summary of the bug,
+along with any information you feel relevant to replicating the bug.
+-->
+
+Observed on aarch64-apple-darwin.
+It also consistently hits my CI runners since release of 1.98,
+failing our CI... each commit (https://github.com/plabayo/rama)
+
+The same Rama source works with Rust 1.97.1, crashes with
+Rust 1.98.0, and works again with nightly-2026-07-16.
+
+Rust 1.98 emits a zero method entry in a compiler-generated
+vtable. Safe Rust dispatches through that entry and the process
+segfaults at address zero.
+
+## Reproduction
+
+Based on my CI failures I made a small example using our rama Repo,
+note that it assumes TCP port 62017 is available:
+
+```bash
+git clone https://github.com/plabayo/rama.git
+cd rama
+git checkout --detach 0b4aa58e33e9d07db2718a3886c05b673ba9a70e
+
+rustup toolchain install 1.98.0
+just clean
+
+CARGO_TARGET_DIR=target-ticket-198 \
+cargo +1.98.0 build \
+  -p rama-examples \
+  --features=cli,tcp,http-full,proxy-full,boring \
+  --bin http_mitm_proxy_boring
+```
+
+Than run:
+
+```bash
+./target-ticket-198/debug/http_mitm_proxy_boring \
+  >/tmp/rama-server-198.log 2>&1 &
+proxy_pid=$!
+
+sleep 2
+
+curl -skv --max-time 5 \
+  --proxy http://john:secret@127.0.0.1:62017 \
+  https://127.0.0.1:1/ \
+  >/tmp/rama-curl-198.log 2>&1 || true
+
+if kill -0 "$proxy_pid" 2>/dev/null; then
+  echo "proxy is still alive"
+  kill "$proxy_pid"
+  wait "$proxy_pid" 2>/dev/null || true
+else
+  wait "$proxy_pid"
+  echo "proxy exited with status $?"
+fi
+
+sed -n '1,120p' /tmp/rama-curl-198.log
+sed -n '1,120p' /tmp/rama-server-198.log
+```
+
+Repeat with separate targets (w/ clean target directory) for `1.97.1` and `nightly-2026-07-16` (tried to narrow down...).
+
+What you should see is the following:
+
+* `1.97.1`: 502 Bad Gateway; proxy remains alive
+* `1.98.0`: CONNECT aborts; SIGSEGV at address zero
+* `nightly-2026-07-16`: 502 Bad Gateway; proxy remains alive
+
+In short, it is expected that the failed upstream connection should be converted into HTTP/1.1 502 Bad Gateway, and the proxy should remain alive.
+
+Instead it is obsered in 1.98 that the CONNECT request is aborted. macOS reports SIGSEGV with pc=0. The generated caller loads the Service method from vtable + 0x18 and branches to the zero value stored there.
+
+Diving into the code it seems that the Rust 1.98 vtable contains valid drop/size/alignment fields,
+but the first method slot at offset 24 is zero. `-Zprint-mono-items` collects the erased caller on Rust 1.98, but
+not `EagerHttpProxyConnector`'s concrete `Service::serve` method. `nightly-2026-07-16` collects both the method and its async closures.
+
+The method may be reaching `VtblEntry::Vacant` because its predicates are incorrectly considered impossible.
+
+Relevant rama types:
+
+* [DynService/BoxService](https://github.com/plabayo/rama/blob/0b4aa58e3/rama-core/src/service/svc.rs#L148-L226)
+* [EagerHttpProxyConnector::serve](https://github.com/plabayo/rama/blob/0b4aa58e3/rama-http/src/layer/upgrade/http_proxy_connect/eager.rs#L65-L112)
+* [responder.boxed() boundary](https://github.com/plabayo/rama/blob/0b4aa58e3/rama-http/src/layer/upgrade/service.rs#L152-L164)
+
+### Meta
+
+```
+macOS crash report:
+
+Exception:       EXC_BAD_ACCESS (SIGSEGV)
+Subtype:         KERN_INVALID_ADDRESS at 0x0000000000000000
+Termination:     Segmentation fault: 11
+Faulting thread: tokio-rt-worker
+PC:              0x0000000000000000
+LR:              0x0000000102511674
+
+The link register resolves to:
+rama_http::layer::upgrade::service::
+  <UpgradeService<...> as Service<Request>>::serve::{closure#0}
+  + 2956
+```
+
+<details><summary>Backtrace</summary>
+<p>
+
+```
+Thread 2 Crashed: tokio-rt-worker
+
+0  0x0000000000000000
+1  <UpgradeService<...> as Service<Request>>::serve::{closure#0}
+2  <tracing::instrument::Instrumented<
+       Trace<...>::serve::{closure#0}
+   > as Future>::poll
+3  <rama_http_core::proto::h1::dispatch::Server<...>
+       as Dispatch>::recv_msg::{closure#0}
+4  rama_http_core::proto::h1::dispatch::Dispatcher<...>::poll_write
+5  rama_http_core::proto::h1::dispatch::Dispatcher<...>::poll_catch
+6  <rama_http_core::server::conn::http1::
+       UpgradeableConnection<...> as Future>::poll
+7  <rama_http_core::server::conn::auto::
+       UpgradeableConnection<...> as Future>::poll
+...
+13 tokio::runtime::scheduler::multi_thread::worker::Context::run_task
+14 tokio::runtime::scheduler::multi_thread::worker::Context::run
+```
+
+The program counter is exactly zero. The link register points inside UpgradeService::serve, at the indirect boxed `Service` call. Together with the emitted vtable containing zero at method offset `0x18,` this indicates that dispatch branches through the null vtable entry.
+
+</p>
+</details>
+
+This may be a recurrence of #152735/#153596 and appears closely related to #158148. It behaviour seems slightly different though: Rust 1.98 silently emits a vacant method slot and the resulting binary crashes, rather than rustc producing an ICE.
+
+Note that this is for some reason the only location where it triggers despite:
+
+* boxed services being used in many other places
+* that we use that async dynamic trait dispatch trick for several other of our traits as well
+
+Yet somehow only with this trait in this exact example it is failing... So there is hope I am just doing something weird here, as I havent found a stable `rustc` bug in 11 years that I used Rust in production.... So I'm really hoping to be wrong here... 
+
+# Workaround
+
+Found a work around but I would rather not have to add these to the codebase...
+
+Because either I am (a) doing something bad since long and I rather just fix it properly in that case,
+as it would mean I was just "lucky" so far. Or this is a real rust bug and in that case I rather help get a 1.98.1 through the door... So far my money is still on me doing something wrong ... somehow... but I don't see how.
+AFAIK that code hasn't changed in any way, and it clearly reproduces on rust 1.98 while it does not on previous versions (e.g. 1.97.1) or nightly versions slightly there-after...
+
+<details><summary>Work around</summary>
+
+```diff
+diff --git a/rama-http/src/layer/upgrade/service.rs b/rama-http/src/layer/upgrade/service.rs
+index d21adcc8b..eaf030fae 100644
+--- a/rama-http/src/layer/upgrade/service.rs
++++ b/rama-http/src/layer/upgrade/service.rs
+@@ -125,7 +125,7 @@ pub struct UpgradeHandler<O> {
+ 
+ enum UpgradeHandlerKind<O> {
+     ResponseLocal {
+-        responder: BoxService<Request, UpgradeOutput<Request, O>, O>,
++        responder: ResponseLocalResponder<O>,
+         handler_error_sink: Arc<dyn ErrorSink>,
+     },
+     SeparateServices {
+@@ -149,6 +149,13 @@ struct PreparedUpgrade<O> {
+     continuation: UpgradeContinuation,
+ }
+ 
++type ResponseLocalResponderFuture<O> =
++    Pin<Box<dyn Future<Output = Result<UpgradeOutput<Request, O>, O>> + Send + 'static>>;
++// Keep the generic `R: Service` predicate outside the erased call boundary.
++// Rust 1.98 can otherwise emit a vacant `BoxService` vtable entry here.
++type ResponseLocalResponder<O> =
++    Arc<dyn Fn(Request) -> ResponseLocalResponderFuture<O> + Send + Sync + 'static>;
++
+ impl<O: Send + 'static> UpgradeHandler<O> {
+     /// Register one service which returns its response-local upgrade handler.
+     pub(crate) fn new<M, R, Sink>(matcher: M, responder: R, sink: Sink) -> Self
+@@ -157,10 +164,15 @@ impl<O: Send + 'static> UpgradeHandler<O> {
+         R: Service<Request, Output = UpgradeOutput<Request, O>, Error = O> + Clone,
+         Sink: ErrorSink,
+     {
++        let responder: ResponseLocalResponder<O> = Arc::new(move |request| {
++            let responder = responder.clone();
++            Box::pin(async move { responder.serve(request).await })
++        });
++
+         Self {
+             matcher: Box::new(matcher),
+             kind: UpgradeHandlerKind::ResponseLocal {
+-                responder: responder.boxed(),
++                responder,
+                 handler_error_sink: Arc::new(sink),
+             },
+             _phantom: std::marker::PhantomData,
+@@ -203,7 +215,7 @@ impl<O: Send + 'static> UpgradeHandler<O> {
+             UpgradeHandlerKind::ResponseLocal {
+                 responder,
+                 handler_error_sink,
+-            } => responder.serve(request).await.map(
++            } => responder(request).await.map(
+                 |UpgradeOutput {
+                      response,
+                      request,
+```
+</details>
+
+Prior to that I also had a work around which changed all boxed services ,not just this specific use case of it,
+I also recall that working. Giving it here as well as extra info:
+
+<details> <summary> box service global work around </summary>
+
+```diff
+diff --git a/rama-core/src/service/svc.rs b/rama-core/src/service/svc.rs
+--- a/rama-core/src/service/svc.rs
++++ b/rama-core/src/service/svc.rs
+@@ -1,5 +1,6 @@
+ //! [`Service`] and [`BoxService`] traits.
+ 
++use core::any::Any;
+ use core::convert::Infallible;
+ use core::fmt;
+ use core::marker::PhantomData;
+@@ -145,46 +146,41 @@ where
+     }
+ }
+ 
+-/// Internal trait for dynamic dispatch of Async Traits,
+-/// implemented according to the pioneers of this Design Pattern
+-/// found at <https://rust-lang.github.io/async-fundamentals-initiative/evaluation/case-studies/builder-provider-api.html#dynamic-dispatch-behind-the-api>
+-/// and widely published at <https://blog.rust-lang.org/inside-rust/2023/05/03/stabilizing-async-fn-in-trait.html>.
+-trait DynService<Input> {
+-    type Output;
+-    type Error;
+-
+-    #[expect(clippy::type_complexity)]
+-    fn serve_box(
+-        &self,
+-        input: Input,
+-    ) -> Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send + '_>>;
+-}
++// Keep dispatch separate from the erased value's vtable. Rust 1.98 can emit a
++// vacant method slot for the custom async-erasure trait with complex services.
++type ErasedService = dyn Any + Send + Sync + 'static;
++type BoxServiceFuture<'a, Output, Error> =
++    Pin<Box<dyn Future<Output = Result<Output, Error>> + Send + 'a>>;
++type ServeErasedFn<Input, Output, Error> =
++    for<'a> fn(&'a ErasedService, Input) -> BoxServiceFuture<'a, Output, Error>;
+ 
+-impl<Input, T> DynService<Input> for T
++fn serve_erased<'a, Input, Output, Error, T>(
++    inner: &'a ErasedService,
++    input: Input,
++) -> BoxServiceFuture<'a, Output, Error>
+ where
+-    T: Service<Input>,
++    T: Service<Input, Output = Output, Error = Error>,
+ {
+-    type Output = T::Output;
+-    type Error = T::Error;
+-
+-    fn serve_box(
+-        &self,
+-        input: Input,
+-    ) -> Pin<Box<dyn Future<Output = Result<Self::Output, Self::Error>> + Send + '_>> {
+-        Box::pin(self.serve(input))
+-    }
++    #[expect(
++        clippy::unwrap_used,
++        reason = "the constructor stores the same service type as its dispatch function"
++    )]
++    let service = inner.downcast_ref::<T>().unwrap();
++    Box::pin(service.serve(input))
+ }
+ 
+ /// A boxed [`Service`], to serve Inputs with,
+ /// for where you inputuire dynamic dispatch.
+ pub struct BoxService<Input, Output, Error> {
+-    inner: Arc<dyn DynService<Input, Output = Output, Error = Error> + Send + Sync + 'static>,
++    inner: Arc<ErasedService>,
++    serve: ServeErasedFn<Input, Output, Error>,
+ }
+ 
+ impl<Input, Output, Error> Clone for BoxService<Input, Output, Error> {
+     fn clone(&self) -> Self {
+         Self {
+             inner: self.inner.clone(),
++            serve: self.serve,
+         }
+     }
+ }
+@@ -198,6 +194,7 @@ impl<Input, Output, Error> BoxService<Input, Output, Error> {
+     {
+         Self {
+             inner: Arc::new(service),
++            serve: serve_erased::<Input, Output, Error, T>,
+         }
+     }
+ }
+@@ -223,7 +220,7 @@ where
+ 
+         input: Input,
+     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send + '_ {
+-        self.inner.serve_box(input)
++        (self.serve)(self.inner.as_ref(), input)
+     }
+ 
+     #[inline]
+```
+
+</details>
+
+----- Comment 1 of 24, by theemathas, 2026-08-21T14:09:41Z -----
+
+Slightly smaller reproducer, with some LLM assistance (depends on `rama` with `default-features = false` and `features =["std", "http-full"]`).
+
+<details>
+
+```rust
+use rama::{
+    Layer, Service, ServiceInput,
+    http::{Body, Request},
+    http::{
+        client::EasyHttpWebClient,
+        layer::upgrade::{EagerHttpProxyConnector, UpgradeLayer, mitm::HttpUpgradeMitmRelayLayer},
+        matcher::MethodMatcher,
+        proxy::mitm::HttpMitmRelay,
+        ws::handshake::{
+            matcher::HttpWebSocketRelayServiceRequestMatcher,
+            mitm::{WebSocketRelayInput, WebSocketRelayOutput, WebSocketRelayService},
+        },
+    },
+    layer::{ArcLayer, ConsumeErrLayer},
+    net::client::{ConnectRequest, ConnectionError, EstablishedClientConnection},
+    rt::Executor,
+    service::service_fn,
+};
+use tokio::io::{AsyncRead, AsyncWrite};
+
+use std::{convert::Infallible, sync::Arc};
+
+async fn inspect_websocket_message(
+    input: WebSocketRelayInput,
+) -> Result<WebSocketRelayOutput, Infallible> {
+    Ok(WebSocketRelayOutput {
+        messages: vec![],
+        extensions: input.extensions,
+    })
+}
+
+trait AsyncReadWrite: AsyncRead + AsyncWrite {}
+impl<T: AsyncRead + AsyncWrite> AsyncReadWrite for T {}
+
+#[tokio::main]
+async fn main() {
+    let exec = Executor::default();
+    let websocket_mitm_layer = HttpUpgradeMitmRelayLayer::new(
+        exec.clone(),
+        HttpWebSocketRelayServiceRequestMatcher::new(WebSocketRelayService::new(service_fn(
+            inspect_websocket_message,
+        ))),
+    );
+    let http_mitm_relay = HttpMitmRelay::new(exec.clone())
+        .with_http_middleware((websocket_mitm_layer, ArcLayer::new()));
+    let mitm_svc = Arc::new(ConsumeErrLayer::trace_as_debug().into_layer(http_mitm_relay));
+    let connector = service_fn(|_req: ConnectRequest| async move {
+        Err::<
+            EstablishedClientConnection<
+                ServiceInput<Box<dyn AsyncReadWrite + Send + Unpin>>,
+                ConnectRequest,
+            >,
+            _,
+        >(ConnectionError::unknown(""))
+    });
+    let connect = EagerHttpProxyConnector::new(connector, mitm_svc);
+    let service = UpgradeLayer::new(exec, MethodMatcher::GET, connect)
+        .into_layer(EasyHttpWebClient::default());
+    let request = Request::builder().body(Body::empty()).unwrap();
+    let _ = service.serve(request).await.unwrap();
+}
+```
+
+</details>
+
+----- Comment 2 of 24, by theemathas, 2026-08-22T11:32:52Z -----
+
+"Smaller" reproducer (thanks in part to LLM again): [segfault-repro.zip](https://github.com/user-attachments/files/31332488/segfault-repro.zip)
+
+----- Comment 3 of 24, by theemathas, 2026-08-22T16:24:01Z -----
+
+Self-contained reproducer (205 lines, probably could be smaller)
+
+<details>
+
+```rust
+use std::convert::Infallible;
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+trait Service<Input>: Sized + Send + Sync + 'static {
+    /// The type of the output returned by the service.
+    type Output: Send + 'static;
+
+    /// The type of error returned by the service.
+    type Error: Send + 'static;
+}
+impl<S, Input> Service<Input> for Arc<S>
+where
+    S: Service<Input>,
+{
+    type Output = S::Output;
+    type Error = S::Error;
+}
+
+fn service_fn<F, T, R, O, E>(f: F) -> ServiceFn<F, T, R, O, E>
+where
+    F: Factory<T, R, O, E>,
+    R: Future<Output = Result<O, E>>,
+{
+    ServiceFn::new(f)
+}
+
+trait Factory<T, R, O, E>: Send + Sync + 'static
+where
+    R: Future<Output = Result<O, E>>,
+{
+}
+
+impl<Input, F, R, O, E> Factory<(Input,), R, O, E> for F
+where
+    F: Fn(Input) -> R + Send + Sync + 'static,
+    R: Future<Output = Result<O, E>>,
+{
+}
+
+struct ServiceFn<F, T, R, O, E>
+where
+    R: Future<Output = Result<O, E>>,
+{
+    hnd: F,
+    _t: PhantomData<fn(T, R, O) -> ()>,
+}
+
+impl<F, T, R, O, E> ServiceFn<F, T, R, O, E>
+where
+    R: Future<Output = Result<O, E>>,
+{
+    pub(crate) fn new(hnd: F) -> Self {
+        Self {
+            hnd,
+            _t: PhantomData,
+        }
+    }
+}
+
+impl<F, T, R, O, E> Clone for ServiceFn<F, T, R, O, E>
+where
+    F: Factory<T, R, O, E> + Clone,
+    R: Future<Output = Result<O, E>>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            hnd: self.hnd.clone(),
+            _t: PhantomData,
+        }
+    }
+}
+
+trait ServiceMatcher<Input>: Send + Sync + 'static {
+    type Service: Send + 'static;
+    type Error: Send + 'static;
+    type ModifiedInput: Send + 'static;
+}
+
+trait Layer<S>: Sized {
+    type Service;
+}
+impl<S, L1, L2> Layer<S> for (L1, L2)
+where
+    L1: Layer<L2::Service>,
+    L2: Layer<S>,
+{
+    type Service = L1::Service;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ArcLayer;
+
+impl ArcLayer {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl<S> Layer<S> for ArcLayer {
+    type Service = Arc<S>;
+}
+
+struct MyError;
+
+pub(crate) struct Request;
+pub(crate) struct Response<T = Body>(T);
+pub(crate) trait StreamingBody {
+    type Error;
+}
+pub(crate) struct Body;
+impl StreamingBody for Body {
+    type Error = MyError;
+}
+
+pub(crate) struct HttpClientService;
+
+impl Service<Request> for HttpClientService {
+    type Output = Response;
+    type Error = MyError;
+}
+
+trait Trait {
+    fn method(&self);
+}
+
+impl<M> Trait for M
+where
+    M: Layer<
+            HttpClientService,
+            Service: Service<Request, Output = Response, Error: Into<MyError>> + Clone,
+        >,
+{
+    fn method(&self) {}
+}
+
+async fn inspect_websocket_message(
+    _input: WebSocketRelayInput,
+) -> Result<WebSocketRelayOutput, Infallible> {
+    Ok(WebSocketRelayOutput)
+}
+
+#[derive(Clone)]
+pub(crate) struct HttpUpgradeMitmRelayLayer<M>(pub(crate) M);
+
+impl<M: Clone, S> Layer<S> for HttpUpgradeMitmRelayLayer<M> {
+    type Service = HttpUpgradeMitmRelay<M, S>;
+}
+
+#[derive(Clone)]
+#[expect(dead_code)]
+pub(crate) struct HttpUpgradeMitmRelay<M, S> {
+    nested_matcher_svc: M,
+    inner_svc: S,
+}
+
+impl<M, S, ResBody> Service<Request> for HttpUpgradeMitmRelay<M, S>
+where
+    M: ServiceMatcher<Request>,
+    S: Service<Request, Output = Response<ResBody>>,
+    ResBody: StreamingBody<Error: Into<MyError>> + 'static,
+{
+    type Output = Response;
+    type Error = S::Error;
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct HttpWebSocketRelayServiceRequestMatcher<S>(pub(crate) S);
+
+impl<S> ServiceMatcher<Request> for HttpWebSocketRelayServiceRequestMatcher<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    type Service = S;
+    type Error = Infallible;
+    type ModifiedInput = Request;
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketRelayService<S>(pub(crate) S);
+
+impl<S> WebSocketRelayService<S> {}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketRelayInput;
+
+#[derive(Debug, Clone)]
+pub(crate) struct WebSocketRelayOutput;
+
+impl<S> Service<()> for WebSocketRelayService<S>
+where
+    S: Service<WebSocketRelayInput>,
+{
+    type Output = ();
+    type Error = Infallible;
+}
+
+fn main() {
+    let websocket_mitm_layer = HttpUpgradeMitmRelayLayer(HttpWebSocketRelayServiceRequestMatcher(
+        WebSocketRelayService(service_fn(inspect_websocket_message)),
+    ));
+    (&(websocket_mitm_layer, ArcLayer::new()) as &dyn Trait).method();
+    println!("done");
+}
+```
+
+</details>
+
+----- Comment 4 of 24, by theemathas, 2026-08-22T16:34:04Z -----
+
+cc @lcnr in case you know what the types is going on here. (I'm currently unable to bisect this myself, due to some brokenness with fastly's servers for downloading older rust compilers, affecting only my geographical area.)
+
+----- Comment 5 of 24, by mProjectsCode, 2026-08-22T16:47:05Z -----
+
+searched nightlies: from nightly-2026-05-22 to nightly-2026-07-05
+regressed nightly: nightly-2026-06-26
+searched commit range: https://github.com/rust-lang/rust/compare/f28ac764c36004fa6a6e098d15b4016a838c13c6...bd08c9e71874a81670fe3938dbf85148e42c2b96
+regressed commit: https://github.com/rust-lang/rust/commit/fa36a479e492137fdf473a891206da127f132910
+
+<details>
+<summary>bisected with <a href='https://github.com/rust-lang/cargo-bisect-rustc'>cargo-bisect-rustc</a> v0.6.11</summary>
+
+
+Host triple: x86_64-unknown-linux-gnu
+Reproduce with:
+```bash
+cargo bisect-rustc --start=1.97.1 --end=1.98.0 -- run
+```
+</details>
+
+----- Comment 6 of 24, by theemathas, 2026-08-22T16:49:43Z -----
+
+Regressed in #156742, cc @adwinwhite (author of the PR)
+
+----- Comment 7 of 24, by theemathas, 2026-08-22T17:00:36Z -----
+
+Notably, the issue doesn't reproduce in `rustc 1.99.0-beta.1 (f47d5bb13 2026-08-17)`.
+
+Below is the bisection to find when the issue was seemingly **fixed** in beta. (The fastly problem seems to have mysteriously fixed itself...)
+
+<details>
+
+```
+********************************************************************************
+Regression in 38a0576951fb5f7209c892b030f40ac166ae86b4
+********************************************************************************
+
+Attempting to search unrolled perf builds
+Found commits ["59d76b9d", "e4711937", "83b1b093", "a43f3c24", "73fe3672", "b66807ff", "24066579", "43a0fe12", "2dfe57e5", "15d74cfa", "38d06308", "c760cb8e", "e07c543b", "831ce2c1", "5ab93f35", "59755709", "fcacd252", "40c8e8f8", "46ae512d", "8265a1fb", "7085f161", "bc691c69"]
+installing 59d76b9da858f2ca2975de0f5b5896694dcf3106
+uninstalling 59d76b9da858f2ca2975de0f5b5896694dcf3106
+installing e4711937ff64c4008f3a61ab53f554c8cad3ab40
+uninstalling e4711937ff64c4008f3a61ab53f554c8cad3ab40
+installing 83b1b093877f84941bba5e66d82be0945580d873
+uninstalling 83b1b093877f84941bba5e66d82be0945580d873
+installing a43f3c242b218d17596165fd1eb321641fd10616
+uninstalling a43f3c242b218d17596165fd1eb321641fd10616
+installing 73fe3672c85e3eedfdf9406cf936a898d22e042f
+uninstalling 73fe3672c85e3eedfdf9406cf936a898d22e042f
+installing b66807fffbc45d5c2f4f147cf11a51c2643acf83
+uninstalling b66807fffbc45d5c2f4f147cf11a51c2643acf83
+installing 240665790bd2cb406552f61aa307e5aaf1da4eba
+uninstalling 240665790bd2cb406552f61aa307e5aaf1da4eba
+installing 43a0fe12c54d986ed1331e6bce08d6e0c20dc99c
+uninstalling 43a0fe12c54d986ed1331e6bce08d6e0c20dc99c
+installing 2dfe57e55814ca8de01a103c1bb15a1b3ad0c69c
+uninstalling 2dfe57e55814ca8de01a103c1bb15a1b3ad0c69c
+installing 15d74cfa3cafa991f050278c91c621e70ce3b2a3
+uninstalling 15d74cfa3cafa991f050278c91c621e70ce3b2a3
+installing 38d06308010fa4139904369cb8cfa368c01c7f36
+uninstalling 38d06308010fa4139904369cb8cfa368c01c7f36
+installing c760cb8e16100b8854271e13fcdce6e1c27d14a0
+uninstalling c760cb8e16100b8854271e13fcdce6e1c27d14a0
+installing e07c543b0e885ff4bc5939f5815c022189cc9090
+uninstalling e07c543b0e885ff4bc5939f5815c022189cc9090
+installing 831ce2c1794c5f7ac51d0b2e8064ab5d2ad76926
+uninstalling 831ce2c1794c5f7ac51d0b2e8064ab5d2ad76926
+installing 5ab93f35e0df9d3820534002a044a5680a4da032
+uninstalling 5ab93f35e0df9d3820534002a044a5680a4da032
+installing 597557095d50a95beafaa8c32a14b98936adc8f8
+uninstalling 597557095d50a95beafaa8c32a14b98936adc8f8
+installing fcacd252ad00eb900972aeb890acc6cec7daf1f5
+uninstalling fcacd252ad00eb900972aeb890acc6cec7daf1f5
+installing 40c8e8f897185a80e81f8cbcb9b4c06e42542fb3
+uninstalling 40c8e8f897185a80e81f8cbcb9b4c06e42542fb3
+installing 46ae512d2573fd5cab5c00727561a721a9314fef
+uninstalling 46ae512d2573fd5cab5c00727561a721a9314fef
+installing 8265a1fb02cf605d4bf78de1b6bcbcad02a2edc8
+uninstalling 8265a1fb02cf605d4bf78de1b6bcbcad02a2edc8
+installing 7085f161ef685516fba68aad7c259a62de9dc74b
+uninstalling 7085f161ef685516fba68aad7c259a62de9dc74b
+installing bc691c693136491d9605f14ee424f3cf1c19aebe
+uninstalling bc691c693136491d9605f14ee424f3cf1c19aebe
+ERROR: none of the toolchains satisfied the predicate
+```
+
+</details>
+
+The bisection points to #159293, but none of the PRs there seem to be relevant... That's weird.
+
+----- Comment 8 of 24, by bjorn3, 2026-08-22T17:54:01Z -----
+
+Could https://github.com/rust-lang/rust/pull/158993 have had anything to do with fixing this?
+
+----- Comment 9 of 24, by lcnr, 2026-08-22T18:06:21Z -----
+
+feels very likely 😁 might be worth testing whether cherry-picking this onto 1.98 fixes things
+
+----- Comment 10 of 24, by theemathas, 2026-08-22T18:16:03Z -----
+
+Minimized reproducer
+
+```rust
+use std::marker::PhantomData;
+
+struct MyError;
+
+trait StreamingBody {
+    type BodyError;
+}
+struct Body;
+impl StreamingBody for Body {
+    type BodyError = MyError;
+}
+
+trait Service {
+    type Output;
+}
+struct HttpClientService;
+impl Service for HttpClientService {
+    type Output = Body;
+}
+
+trait Trait {
+    fn method(&self);
+}
+impl<F, R, ResBody> Trait for (F, PhantomData<R>)
+where
+    F: Fn() -> R,
+    HttpClientService: Service<Output = ResBody>,
+    ResBody: StreamingBody<BodyError: Sized>,
+{
+    fn method(&self) {}
+}
+
+async fn inspect_websocket_message() {}
+
+fn main() {
+    (&(inspect_websocket_message, PhantomData) as &dyn Trait).method();
+    println!("done");
+}
+```
+
+Yes, the `async` is somehow load-bearing.
+
+----- Comment 11 of 24, by theemathas, 2026-08-22T18:22:32Z -----
+
+Actually, changing
+```rust
+async fn inspect_websocket_message() {}
+```
+to
+```rust
+fn inspect_websocket_message() -> impl Sized {
+    || {}
+}
+```
+also still reproduces the problem.
+
+----- Comment 12 of 24, by lcnr, 2026-08-22T18:46:11Z -----
+
+I guess we should backport https://github.com/rust-lang/rust/pull/158993 to the latest stable '^^
+
+----- Comment 13 of 24, by theemathas, 2026-08-22T18:57:26Z -----
+
+@lcnr Are you proposing a 1.98.1 patch release?
+
+----- Comment 14 of 24, by lcnr, 2026-08-22T19:00:07Z -----
+
+certainly yeah, while this should be a near guaranteed segfault, it#s still UB users hit by accident
+
+----- Comment 15 of 24, by lcnr, 2026-08-22T19:10:14Z -----
+
+opened https://github.com/rust-lang/rust/pull/161555
+
+----- Comment 16 of 24, by GlenDC, 2026-08-22T19:17:53Z -----
+
+I already run clippy and such linting checks against beta/nightly every day in a cron job (https://github.com/plabayo/rama/blob/main/.github/workflows/CI-unstable.yml)... I suppose I better also run the full test suite through beta once per day? That probably would have caught this still in beta phase? Not that it's a perfect weapon, but it's better than nothing I suppose.
+
+Let me know if you think that's useful, and I'll add it with pleasure.
+
+----- Comment 17 of 24, by lcnr, 2026-08-22T19:20:49Z -----
+
+miscompilations should be rare (one would hope), but if it doesn't add an additional cost to you, that would be very appreciated 😊
+
+----- Comment 18 of 24, by GlenDC, 2026-08-22T19:23:30Z -----
+
+> miscompilations should be rare (one would hope), but if it doesn't add an additional cost to you, that would be very appreciated 😊
+
+In my 11 years developing production code with Rust it is the first stable rustc bug I hit, so seems rare enough from my point of view :)
+And it's ok, we can handle it, will do so for a couple of platforms as well, even though this one seemed platform agnostic.
+
+*edit*: added it: https://github.com/plabayo/rama/commit/917661dcf3fc72efe95c949bf039d604c300a17c
+
+----- Comment 19 of 24, by theemathas, 2026-08-22T23:18:57Z -----
+
+> certainly yeah, while this should be a near guaranteed segfault, it#s still UB users hit by accident
+
+@lcnr During the minimization process, there were points where I got a SIGILL instead of a SIGSEGV. At one point, I also got an panic saying that a future was resumed after it finished, with optimizations off (at which point I inserted a `black_box()` call that restored the non-panic crash). I think that's a sign that this UB isn't as benign as you described.
+
+Edit: I'm not sure if I messed up something with the debug-mode behavior change.
+
+----- Comment 20 of 24, by theemathas, 2026-08-23T02:55:10Z -----
+
+Here's a case where, with optimizations turned on, this bug causes a behavior change that's not just crashing. https://play.rust-lang.org/?version=stable&mode=release&edition=2024&gist=32d2d5e973d730e246fb003c34ac2a68
+
+----- Comment 21 of 24, by lcnr, 2026-08-23T06:55:09Z -----
+
+> [@lcnr](https://github.com/lcnr) During the minimization process, there were points where I got a SIGILL instead of a SIGSEGV. At one point, I also got an panic saying that a future was resumed after it finished, with optimizations off (at which point I inserted a `black_box()` call that restored the non-panic crash). I think that's a sign that this UB isn't as benign as you described.
+
+UB is UB after all 😅 LLVM is allowed to optimize based on the fact that the vtable entry is a null pointer 😅 cool to see examples of this actually happening
+
+----- Comment 22 of 24, by theemathas, 2026-08-23T17:40:38Z -----
+
+The debug mode behavior change was bugging me, so I checked. Turned out that the original `Cargo.toml` from `rama` had set `opt-level = 1` in debug mode. *That's* why I got strange behaviors in debug mode.
+
+So, in debug mode, with optimizations off, the worst this can do is probably just segfault.
+
+----- Comment 23 of 24, by DianaNites, 2026-08-24T05:49:17Z -----
+
+In that case its also worth noting the potential of parent folder or user-global `.cargo/config`s interference as well, if you may have something like `[profile.dev.package."*"] opt-level = 1`
+
+----- Comment 24 of 24, by theemathas, 2026-09-03T13:54:58Z -----
+
+1.98.1 has released. Closing this issue as fixed.
+
+----- Pull request rust-lang/rust#156742: Add rigid alias marker -----
+Opened by adwinwhite on 2026-05-19T09:48:47Z. Merged on 2026-06-25T18:18:30Z.
+https://github.com/rust-lang/rust/pull/156742
+
+<!-- homu-ignore:start -->
+*[View all comments](https://triagebot.infra.rust-lang.org/gh-comments/rust-lang/rust/pull/156742)*
+<!-- homu-ignore:end -->
+
+<!-- homu-ignore:start -->
+<!--
+If this PR is related to an unstable feature or an otherwise tracked effort,
+please link to the relevant tracking issue here. If you don't know of a related
+tracking issue or there are none, feel free to ignore this.
+
+This PR will get automatically assigned to a reviewer. In case you would like
+a specific user to review your work, you can assign it to them by using
+
+    r? <reviewer name>
+-->
+<!-- homu-ignore:end -->
+
+This PR adds a rigidness marker to `TyKind::Alias` and `ConstKind::Unevaluated`. It's used to skip renormalization of rigid aliases. The tracking issue for this is rust-lang/rust#155345.
+
+The difficulty is that rigid aliases are only valid in their own `TypingEnv` so we need to force them back to non-rigid when entering another `TypingEnv`, either because a change to the `ParamEnv` or because we enter another `TypingMode`.
+
+Changes to the `ParamEnv` currently only happen by moving into a new context. We now make sure that `EarlyBinder` new contains any rigid aliases, this way we have to normalize all aliases contained in it after instantiating.
+
+Changes to the `TypingMode` are rare, and have to be manually handled.
+
+---
+
+The main changes in this PR are as follows:
+- we add `enum IsRigid { Yes, No }` as a field to `TyKind::Alias` and `ConstKind::Unevaluated`. It is always `No` with the old solver, this makes some of the code less nice than it will be with the old solver removed.
+- if we keep an alias as rigid when proving `Projection` goals we equate the expected term with that alias with `IsRigid::Yes`
+- `EarlyBinder::bind` now takes the `tcx` and eagerly sets all `IsRigid` to `No`, this is necessary as moving aliases into a different `TypingEnv` may cause them to no longer be rigid
+- `EarlyBinder::bind_iter` asserts that there are no rigid aliases instead of replacing them
+- type relations and generalization always structurally recurse into rigid aliases
+- a lot of places in the new solver can ICE when matching on `TyKind::Alias` with `IsRigid::No`
+
+---
+
+There's a lot of future work here:
+- coherence don't actually rely on lazy norm :<
+- remove eq_structurally_relating_aliases, have a special type folder for canonical responses
+- yeet `AliasRelate`, lazily replace non-rigid aliases with infer var + projection goal
+- `ParamEnv` normalization hack to incorrectly mark things as rigid
+- eagerly normalize when adding stuff to the fulfillment ctxt :>
+- change `TypeOutlives` goal handling to only expect rigid aliases
+- properly expect `IsRigid::Yes`in region handling (or `yes_if_next_solver`)
+- probably change `EarlyBinder::bind` to also assert that there are no rigid aliases and manually replacing rigid aliases before then where necessary
+
+---
+
+This PR also adds a flag `-Zrenormalize-rigid-aliases` to test whether we properly handle typing mode change.
+
+Currently only `tests/ui/traits/next-solver/assembly/ambiguity-due-to-uniquification-4.rs` fails this check.
+
+r? lcnr
+
+----- Pull request rust-lang/rust#158993: rerun in original typing mode if we meet any opaques in post analysis -----
+Opened by adwinwhite on 2026-07-09T03:49:03Z. Merged on 2026-07-15T03:22:02Z.
+https://github.com/rust-lang/rust/pull/158993
+
+<!-- homu-ignore:start -->
+<!--
+If this PR is related to an unstable feature or an otherwise tracked effort,
+please link to the relevant tracking issue here. If you don't know of a related
+tracking issue or there are none, feel free to ignore this.
+
+This PR will get automatically assigned to a reviewer. In case you would like
+a specific user to review your work, you can assign it to them by using
+
+    r? <reviewer name>
+-->
+<!-- homu-ignore:end -->
+
+When the rerun condition is `OpaqueInStorage` and typing mode is `PostAnalysis/Codegen`, we do rerun the evaluation in original typing mode.
+It's strange that we don't do the same when the rerun condition is `OpaqueInStorageOrAnyOpaqueHasInferAsHidden`.
+
+This fixes an ICE when building `cargo` with the next solver.
+
+r? @jdonszelmann 
+cc @lcnr
+
+----- Pull request rust-lang/rust#161555: [stable] 1.98.1 release -----
+Opened by lcnr on 2026-08-22T19:09:22Z. Merged on 2026-09-01T12:26:53Z.
+https://github.com/rust-lang/rust/pull/161555
+
+<!-- homu-ignore:start -->
+*[View all comments](https://triagebot.infra.rust-lang.org/gh-comments/rust-lang/rust/pull/161555)*
+<!-- homu-ignore:end -->
+
+Backport of "rerun in original typing mode if we meet any opaques in post analysis" rust-lang/rust#158993 to stable, fixes rust-lang/rust#161441
+
+We didn't notice that a beta cutoff happened between rust-lang/rust#156742 and rust-lang/rust#158993 and it's easy to forget that we need to be careful with next-solver bugs as they can affect stable via coherence and `impossible_predicates`.
+
+Changes in this pull request:
+
+diff --git a/RELEASES.md b/RELEASES.md
+@@ -1,3 +1,10 @@
++Version 1.98.1 (2026-09-03)
++===========================
++
++<a id="1.98.1"></a>
++
++* [rustc: fix miscompilation in generating vtables](https://github.com/rust-lang/rust/issues/161441)
++
+ Version 1.98.0 (2026-08-20)
+ ==========================
+
+diff --git a/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs b/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs
+@@ -870,7 +870,7 @@ where
+             (
+                 RerunCondition::OpaqueInStorageOrAnyOpaqueHasInferAsHidden(_),
+                 TypingMode::PostAnalysis | TypingMode::Codegen,
+-            ) => RerunDecision::No,
++            ) => RerunDecision::Yes,
+             (
+                 RerunCondition::OpaqueInStorageOrAnyOpaqueHasInferAsHidden(defids),
+                 TypingMode::Typeck { defining_opaque_types_and_generators: opaques },
+
+diff --git a/src/ci/run.sh b/src/ci/run.sh
+@@ -236,6 +236,10 @@ datecheck() {
+ datecheck
+ trap datecheck EXIT
+ 
++# Bump this value if you need to invalidate sccache's cache, if some wrong
++# builds go into it
++export SCCACHE_C_CUSTOM_CACHE_BUSTER=57c589c2a3266d9733e2
++
+ # We've had problems in the past of shell scripts leaking fds into the sccache
+ # server (#48192) which causes Cargo to erroneously think that a build script
+ # hasn't finished yet. Try to solve that problem by starting a very long-lived
+
+diff --git a/src/version b/src/version
+@@ -1 +1 @@
+-1.98.0
++1.98.1
+
+diff --git a/tests/ui/traits/next-solver/rerun-if-any-opaque-or-has-infer-as-hidden-in-codegen.rs b/tests/ui/traits/next-solver/rerun-if-any-opaque-or-has-infer-as-hidden-in-codegen.rs
+@@ -0,0 +1,34 @@
++//@ compile-flags: -Znext-solver
++//@ check-pass
++
++fn mk_vec() -> Vec<Vec<&'static str>> {
++    loop {}
++}
++
++fn parse_feature(feature: &str) -> impl Iterator<Item = &str> {
++    std::iter::once(feature)
++}
++
++fn main() {
++    // In `codegen_select_candidate`, we try to find an impl for `FlatMap::into_iter`
++    // We try to prove `FlatMap<...>: IntoIterator`.
++    // The blanket impl requires `FlatMap<...>: Iterator`.
++    // The `Iterator` impl of `FlatMap` has nested goals:
++    // `Projection(Fn::Output<parse_feature, (?assoc,)>, iter::Once`.
++    // We normalize this goal and set rerun condition to `AnyOpaqueHasInferAsHidden`
++    // with reason `SelfTyInfer` because we instantiated impls with infers when
++    // assembling candidates for intermediate goals.
++    // Then we evaluate the normalized goal:
++    // `Projection(Fn::Output<parse_feature, (&str,)>, iter::Once`.
++    // The alias term is normalized to rigid alias `impl Iterator<Item = &str>` as
++    // we're in `TypingMode::ErasedNotCoherence`.
++    // But the expected term is revealed `iter::Once` thus relating failed.
++    // The goal fails with rerun condition `OpaqueInStorage(parse_feature::opaque)`.
++    // This goal should be rerun in `TypingMode::Codegen` mode, but
++    // `AnyOpaqueHasInferAsHidden + OpaqueInStorage = OpaqueInStorageOrAnyOpaqueHasInferAsHidden`
++    // which didn't trigger rerun in `TypingMode::Codegen` mode previously.
++    mk_vec()
++        .into_iter()
++        .flatten()
++        .flat_map(parse_feature).into_iter();
++}
+
+diff --git a/tests/ui/traits/object/rerun-impossible-predicates-post-analysis.rs b/tests/ui/traits/object/rerun-impossible-predicates-post-analysis.rs
+@@ -0,0 +1,43 @@
++//@ run-pass
++
++// Regression test for #161441. This is a next-solver bug fixed by #158993
++// which affected stable due to `impossible_predicates` already using the next-solver
++// by default.
++
++use std::marker::PhantomData;
++
++struct MyError;
++
++trait StreamingBody {
++    type BodyError;
++}
++struct Body;
++impl StreamingBody for Body {
++    type BodyError = MyError;
++}
++
++trait Service {
++    type Output;
++}
++struct HttpClientService;
++impl Service for HttpClientService {
++    type Output = Body;
++}
++
++trait Trait {
++    fn method(&self);
++}
++impl<F, R, ResBody> Trait for (F, PhantomData<R>)
++where
++    F: Fn() -> R,
++    HttpClientService: Service<Output = ResBody>,
++    ResBody: StreamingBody<BodyError: Sized>,
++{
++    fn method(&self) {}
++}
++
++fn inspect_websocket_message() -> impl Sized {}
++
++fn main() {
++    (&(inspect_websocket_message, PhantomData) as &dyn Trait).method();
++}
+</thread>
+
+Explain this bug to a curious, intelligent reader familiar with programming.
