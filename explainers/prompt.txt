@@ -1,0 +1,3 @@
+The thread above is a bug report from the Rust programming language's GitHub repository, with all of its comments, followed by three pull requests the thread refers to.
+
+Explain this bug to a curious, intelligent reader who is not a programmer: what went wrong, why it happened, and how it was fixed. Write 400 to 600 words. Reply with the explanation only.

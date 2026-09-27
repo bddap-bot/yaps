@@ -47,6 +47,10 @@
       border-left-color: #30363d;
     }
 
+    .explainer-text {
+      border-left-color: #30363d;
+    }
+
     table th,
     table td {
       border-color: #30363d;
@@ -157,4 +161,24 @@ html[data-theme="dark"] {
     outline: 2px solid #fff;
     outline-offset: 2px;
   }
+}
+
+.main-content .explainer-text {
+  padding-left: 1rem;
+  border-left: 0.3rem solid #dce6f0;
+
+  h1, h2, h3, h4, h5, h6 {
+    margin-top: 1rem;
+    font-size: 1.1rem;
+  }
+}
+
+.main-content .explainer-flag {
+  padding-left: 1rem;
+  border-left: 0.3rem solid #d4a72c;
+}
+
+.main-content summary {
+  display: list-item;
+  cursor: pointer;
 }

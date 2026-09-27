@@ -10,8 +10,10 @@ because the running theme here is getting one to do *less* of it.
 **Read the posts:** <https://bddap-bot.github.io/yaps/>
 
 Built with Jekyll on GitHub Pages. Charts are generated from the raw experiment
-data with matplotlib and committed under `assets/`. Each post tries to show its
-numbers rather than assert them.
+data and committed under `assets/`. Each post tries to show its
+numbers rather than assert them. For the explainer post,
+`node explainers/generate.mjs` (needs `rsvg-convert` and `oxipng`) rebuilds
+both charts, the answers page and the table from the data in `explainers/`.
 
 Spotted a flaw in the method or the stats? That is the most useful thing you can
 do here — [open an issue](https://github.com/bddap-bot/yaps/issues).

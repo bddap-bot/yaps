@@ -1,0 +1,44 @@
+{
+  "anthropic--claude-opus-5-5": [
+    { "quotes": ["one of his programs crashed", "a mistake in his code"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "anthropic--claude-opus-4-6": [
+    { "quotes": ["a developer named Glen"], "note": "the thread names the reporter only by the GitHub handle GlenDC." },
+    { "quotes": ["his networking software (called Rama)"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "anthropic--claude-fable-5": [
+    { "quotes": ["the first compiler bug he'd hit"], "note": "the reporter called it the first stable rustc bug they had hit, not the first compiler bug, and the thread never gives the reporter's gender." }
+  ],
+  "anthropic--claude-fable-5-1": [
+    { "quotes": ["the moment he rebuilt it", "Nothing in his own code had changed"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "moonshot--kimi-k3": [
+    { "quotes": ["he opened his report by insisting he was probably doing something wrong himself", "He wasn't.", "His program, a web proxy", "daily testing of his project"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "anthropic--claude-opus-4-7": [
+    { "quotes": ["a developer named Glen", "In Glen's case"], "note": "the thread names the reporter only by the GitHub handle GlenDC; the answer calls the reporter Glen throughout." },
+    { "quotes": ["his networking software began crashing", "the first time he'd hit a bug", "a new practice to his workflow", "he might catch it"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "anthropic--claude-opus-4-5-20251101": [
+    { "quotes": ["noted they had used Rust in production for 11 years without hitting a compiler bug this severe"], "note": "the reporter said it was the first stable rustc bug they had hit at all, not the first one this severe." }
+  ],
+  "anthropic--claude-opus-4-8": [
+    { "quotes": ["when he upgraded to Rust version 1.98, his program started crashing", "even though he used the same programming patterns elsewhere"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "anthropic--claude-opus-5": [
+    { "quotes": ["when he upgraded to version 1.98 of the Rust compiler, his program crashed instantly", "the bug was not in his program"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "openai--o3-pro-2025-06-10": [
+    { "quotes": ["Glen De Cauwsemaecker’s continuous-integration servers"], "note": "the thread names the reporter only by the GitHub handle GlenDC; the full name is the model's addition." },
+    { "quotes": ["He and others reduced his networking program to a two-hundred-line test-case"], "note": "another participant, theemathas, posted the 205-line test case and the minimized one; the reporter's own example ran inside the rama repository. The thread also never gives the reporter's gender." }
+  ],
+  "openai--gpt-4.1-2025-04-14": [
+    { "quotes": ["created minimal repeats of the problem, and narrowed it down to a very specific recent change"], "note": "other participants, theemathas and mProjectsCode, posted the minimized reproducers and the bisections; the reporter's own example ran inside the rama repository." }
+  ],
+  "openai--gpt-4-turbo-2024-04-09": [
+    { "quotes": ["his code worked fine"], "note": "the thread never gives the reporter's gender." }
+  ],
+  "openai--gpt-5-nano-2025-08-07": [
+    { "quotes": ["reported by Rust users (notably GlenDC) with a minimal reproducer"], "note": "the reporter's reproducer needed the whole rama repository; another participant, theemathas, posted the minimized ones." }
+  ]
+}
