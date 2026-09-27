@@ -1,0 +1,31 @@
+{
+  "anthropic--claude-opus-5-5": [
+    { "quotes": ["The reporter assumed it was his fault."], "note": "the thread never gives the reporter's gender." }
+  ],
+  "anthropic--claude-fable-5-1": [
+    { "quotes": ["Adwin White found the same missing rerun"], "note": "the thread names the author of the fix only by the GitHub handle adwinwhite." },
+    { "quotes": ["bjorn3 correctly guessed #158993 from memory"], "note": "the thread shows bjorn3 asking whether #158993 could have fixed it, not how bjorn3 came to it." }
+  ],
+  "anthropic--claude-fable-5": [
+    { "quotes": ["his proxy server started segfaulting"], "note": "the thread never gives the reporter's gender." },
+    { "quotes": ["his first stable rustc miscompilation"], "note": "the reporter called it the first stable rustc bug they had hit, not the first miscompilation, and the thread never gives the reporter's gender." }
+  ],
+  "moonshot--kimi-k3": [
+    { "quotes": ["which is why lcnr pushed for a point release"], "note": "lcnr backed a 1.98.1 release before the non-crash behaviour was shown, because the bug is undefined behaviour users hit by accident even though it should nearly always segfault." }
+  ],
+  "openai--gpt-5.1": [
+    { "quotes": ["In Glen’s `rama` project"], "note": "the thread names the reporter only by the GitHub handle GlenDC." }
+  ],
+  "openai--gpt-5.2-2025-12-11": [
+    { "quotes": ["Rust 1.99 beta: didn’t reproduce"], "note": "listed under what the reporter saw, but it was theemathas who found that 1.99 beta does not reproduce the bug." }
+  ],
+  "openai--gpt-6-luna": [
+    { "quotes": ["The reporter confirmed the issue was fixed in Rust 1.98.1."], "note": "the reporter never confirms the fix; theemathas closed the issue when 1.98.1 was released." }
+  ],
+  "openai--gpt-4o-2024-11-20": [
+    { "quotes": ["provided a minimal example that consistently demonstrated this behavior"], "note": "the reporter's example needed the whole rama repository; theemathas posted the minimized reproducers." }
+  ],
+  "anthropic--claude-opus-4-7": [
+    { "quotes": ["pushed back with a Godbolt example"], "note": "theemathas posted a Rust Playground link run in release mode; the thread has no Godbolt example." }
+  ]
+}

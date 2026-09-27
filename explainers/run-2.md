@@ -45,3 +45,11 @@ Reply with the JSON object the schema describes: the factual errors you found (e
 The judge's system prompt is that rubric, the thread, and prompt-2.txt as the writer's brief.
 
 **What gets published.** Every run-2 answer, unedited, on the [answers page]({{ '/explainers/' | relative_url }}) beside the same entry's run-1 answer; claims an answer makes about a real person are checked against the thread, and unsupported ones are marked as model errors. The winner of run 2 writes the follow-up post, which shows the top two answers and the shortest answer in the top ten in full and charts score against word count for both runs.
+
+## Results
+
+Recorded after judging.
+
+- All 89 entries answered. Four first attempts were cut off partway through the answer when the Anthropic and OpenAI API accounts ran out of credit: `claude-opus-4-7`, `claude-opus-4-5-20251101`, `claude-sonnet-4-5-20250929` and `gpt-5-pro`. Nothing from those attempts was judged; each request was re-sent through the same access path once the API accepted requests again, and [results-2.json](results-2.json) lists the four under `resent`.
+- The judge ran through a different access path than in run 1. With the API account out of credit, `claude-fable-5-1` at its default effort was reached through a Claude subscription, which requires the system prompt to open with one fixed line, "You are Claude Code, Anthropic's official CLI for Claude.", ahead of the rubric, the thread and prompt-2.txt. All 89 run-2 answers were judged this way, with the same system prompt: 85 in one blind pass, and the four re-sent answers afterwards under new labels, their mapping hashed before their first judge call.
+- The winner is `gpt-6-astra` through the ChatGPT subscription, 90/100, tied with `gpt-6-astra` through the OpenAI API and ahead on understanding, the second tie-break. Scores, word counts and every answer beside its run-1 answer are on the [answers page]({{ '/explainers/' | relative_url }}); the [post]({{ '/2026/09/27/the-same-bug-with-no-word-limit/' | relative_url }}) is written by the winner.
